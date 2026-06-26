@@ -515,14 +515,47 @@ impl KeccakSetup {
         Self::with_profile_and_rate(n_keccaks, profile, profile.log_inv_rate())
     }
 
+    /// Like [`Self::new`] but with explicit setup warm options (for benchmarks).
+    pub fn new_with_warm_opts(n_keccaks: usize, warm: super::common::SetupWarmOpts) -> Self {
+        Self::with_profile_and_warm_opts(
+            n_keccaks,
+            flock_core::pcs::ligerito::LigeritoProfile::Fast,
+            warm,
+        )
+    }
+
+    /// Like [`Self::with_profile`] but with explicit setup warm options.
+    pub fn with_profile_and_warm_opts(
+        n_keccaks: usize,
+        profile: flock_core::pcs::ligerito::LigeritoProfile,
+        warm: super::common::SetupWarmOpts,
+    ) -> Self {
+        Self::with_profile_rate_and_warm_opts(n_keccaks, profile, profile.log_inv_rate(), warm)
+    }
+
     fn with_profile_and_rate(
         n_keccaks: usize,
         profile: flock_core::pcs::ligerito::LigeritoProfile,
         log_inv_rate: usize,
     ) -> Self {
+        Self::with_profile_rate_and_warm_opts(
+            n_keccaks,
+            profile,
+            log_inv_rate,
+            super::common::SetupWarmOpts::PRODUCTION,
+        )
+    }
+
+    fn with_profile_rate_and_warm_opts(
+        n_keccaks: usize,
+        profile: flock_core::pcs::ligerito::LigeritoProfile,
+        log_inv_rate: usize,
+        warm: super::common::SetupWarmOpts,
+    ) -> Self {
         assert!(n_keccaks >= 1);
         let n_blocks_log = min_n_blocks_log(n_keccaks);
         let r1cs = build_block_r1cs(n_blocks_log);
+        super::common::apply_setup_warm(&r1cs, warm);
         let pcs_params = PcsParams {
             m: r1cs.m,
             log_inv_rate,

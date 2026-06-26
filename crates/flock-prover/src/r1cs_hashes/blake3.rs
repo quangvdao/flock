@@ -1283,19 +1283,47 @@ impl Blake3Setup {
         Self::with_profile_and_rate(n_blocks, profile, profile.log_inv_rate())
     }
 
+    /// Like [`Self::new`] but with explicit setup warm options (for benchmarks).
+    pub fn new_with_warm_opts(n_blocks: usize, warm: super::common::SetupWarmOpts) -> Self {
+        Self::with_profile_and_warm_opts(
+            n_blocks,
+            flock_core::pcs::ligerito::LigeritoProfile::Fast,
+            warm,
+        )
+    }
+
+    /// Like [`Self::with_profile`] but with explicit setup warm options.
+    pub fn with_profile_and_warm_opts(
+        n_blocks: usize,
+        profile: flock_core::pcs::ligerito::LigeritoProfile,
+        warm: super::common::SetupWarmOpts,
+    ) -> Self {
+        Self::with_profile_rate_and_warm_opts(n_blocks, profile, profile.log_inv_rate(), warm)
+    }
+
     fn with_profile_and_rate(
         n_blocks: usize,
         profile: flock_core::pcs::ligerito::LigeritoProfile,
         log_inv_rate: usize,
     ) -> Self {
+        Self::with_profile_rate_and_warm_opts(
+            n_blocks,
+            profile,
+            log_inv_rate,
+            super::common::SetupWarmOpts::PRODUCTION,
+        )
+    }
+
+    fn with_profile_rate_and_warm_opts(
+        n_blocks: usize,
+        profile: flock_core::pcs::ligerito::LigeritoProfile,
+        log_inv_rate: usize,
+        warm: super::common::SetupWarmOpts,
+    ) -> Self {
         assert!(n_blocks >= 1, "n_blocks must be ≥ 1");
         let n_log = min_n_blocks_log(n_blocks);
         let r1cs = build_block_r1cs(n_log);
-        // Warm the CSC fold circuit here so its one-time build (a pass over
-        // ~21M nonzeros) stays out of the first prove/verify, and pre-fault
-        // the prove-cycle scratch buffers (see scratch::prewarm_prover).
-        r1cs.csc_lincheck_circuit();
-        flock_core::scratch::prewarm_prover(r1cs.m);
+        super::common::apply_setup_warm(&r1cs, warm);
         let pcs_params = PcsParams {
             m: r1cs.m,
             log_inv_rate,

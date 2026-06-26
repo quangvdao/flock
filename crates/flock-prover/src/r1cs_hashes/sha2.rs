@@ -1272,19 +1272,50 @@ impl Sha256HybridSetup {
         Self::with_profile_and_rate(n_compressions, profile, profile.log_inv_rate())
     }
 
+    /// Like [`Self::new`] but with explicit setup warm options (for benchmarks).
+    pub fn new_with_warm_opts(
+        n_compressions: usize,
+        warm: super::common::SetupWarmOpts,
+    ) -> Self {
+        Self::with_profile_and_warm_opts(
+            n_compressions,
+            flock_core::pcs::ligerito::LigeritoProfile::Fast,
+            warm,
+        )
+    }
+
+    /// Like [`Self::with_profile`] but with explicit setup warm options.
+    pub fn with_profile_and_warm_opts(
+        n_compressions: usize,
+        profile: flock_core::pcs::ligerito::LigeritoProfile,
+        warm: super::common::SetupWarmOpts,
+    ) -> Self {
+        Self::with_profile_rate_and_warm_opts(n_compressions, profile, profile.log_inv_rate(), warm)
+    }
+
     fn with_profile_and_rate(
         n_compressions: usize,
         profile: flock_core::pcs::ligerito::LigeritoProfile,
         log_inv_rate: usize,
     ) -> Self {
+        Self::with_profile_rate_and_warm_opts(
+            n_compressions,
+            profile,
+            log_inv_rate,
+            super::common::SetupWarmOpts::PRODUCTION,
+        )
+    }
+
+    fn with_profile_rate_and_warm_opts(
+        n_compressions: usize,
+        profile: flock_core::pcs::ligerito::LigeritoProfile,
+        log_inv_rate: usize,
+        warm: super::common::SetupWarmOpts,
+    ) -> Self {
         assert!(n_compressions >= 1, "n_compressions must be ≥ 1");
         let n_log = min_n_blocks_log(n_compressions);
         let r1cs = build_block_r1cs(n_log);
-        // Warm the CSC fold circuit so its one-time build stays out of the
-        // first prove/verify, and pre-fault the prove-cycle scratch buffers
-        // so even the first prove performs no page faults.
-        r1cs.csc_lincheck_circuit();
-        flock_core::scratch::prewarm_prover(r1cs.m);
+        super::common::apply_setup_warm(&r1cs, warm);
         let pcs_params = flock_core::pcs::PcsParams {
             m: r1cs.m,
             log_inv_rate,

@@ -8,6 +8,42 @@ use flock_core::bits::transpose_8_u64s_to_64_bytes;
 use flock_core::field::F128;
 use flock_core::r1cs::{BlockR1cs, SparseBinaryMatrix};
 
+/// Optional one-time setup work performed by hash `Setup` constructors.
+///
+/// Production paths use [`SetupWarmOpts::PRODUCTION`]. Benchmark harnesses can
+/// disable CSC build and/or scratch prewarm to measure cold-memory behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SetupWarmOpts {
+    /// Build the CSC lincheck fold circuit once at setup (large one-time pass).
+    pub csc_circuit: bool,
+    /// Allocate and first-touch prove-cycle scratch buffers via
+    /// [`flock_core::scratch::prewarm_prover`].
+    pub scratch_prewarm: bool,
+}
+
+impl SetupWarmOpts {
+    /// Default production setup: CSC warm + scratch prewarm.
+    pub const PRODUCTION: Self = Self {
+        csc_circuit: true,
+        scratch_prewarm: true,
+    };
+    /// Cold setup for memory-regime benchmarks: no CSC warm, no scratch prewarm.
+    pub const COLD: Self = Self {
+        csc_circuit: false,
+        scratch_prewarm: false,
+    };
+}
+
+/// Apply [`SetupWarmOpts`] after an R1CS is built.
+pub fn apply_setup_warm(r1cs: &BlockR1cs, warm: SetupWarmOpts) {
+    if warm.csc_circuit {
+        r1cs.csc_lincheck_circuit();
+    }
+    if warm.scratch_prewarm {
+        flock_core::scratch::prewarm_prover(r1cs.m);
+    }
+}
+
 /// OR the low 32 bits of `val` into `buf` starting at bit-offset `bit_off`.
 /// Handles u64 straddling when `bit_off % 64 > 32`.
 #[inline(always)]

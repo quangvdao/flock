@@ -231,6 +231,10 @@ name = "chain_bench"
 required-features = ["unsound-challenger"]
 
 [[bench]]
+name = "memory_regime_bench"
+harness = false
+
+[[bench]]
 name = "permutation"
 harness = false
 
