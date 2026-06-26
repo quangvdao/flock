@@ -23,6 +23,9 @@ set -euo pipefail
 
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLOCK_ROOT="$(cd "$BASE/.." && pwd)"
+# shellcheck source=bench_cache_lib.sh
+source "$BASE/bench_cache_lib.sh"
+CACHE_STAMP="$(bench_cache_repo_stamp "$FLOCK_ROOT")"
 CACHE_DIR="$BASE/bench-blake3-cache"
 mkdir -p "$CACHE_DIR"
 
@@ -79,7 +82,7 @@ to_ms() {
 	}'
 }
 
-cache_file() { echo "$CACHE_DIR/flock_2^${1}_t${2}"; }   # h, threads
+cache_file() { bench_cache_file "$CACHE_DIR" flock "$1" "$2" "$CACHE_STAMP"; }
 
 # summary_row LABEL THREADS CACHEFILE — one formatted line from a cached row.
 SUMMARY_FMT='  %-9s %-4s %11s %9s %11s %12s %13s\n'

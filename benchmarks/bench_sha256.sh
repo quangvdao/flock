@@ -38,6 +38,9 @@ set -euo pipefail
 
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLOCK_ROOT="$(cd "$BASE/.." && pwd)"
+# shellcheck source=bench_cache_lib.sh
+source "$BASE/bench_cache_lib.sh"
+CACHE_STAMP="$(bench_cache_repo_stamp "$FLOCK_ROOT")"
 
 # Thread count — performance-core count by default (matches Flock's
 # init_perf_thread_pool); RAYON_NUM_THREADS wins. Also part of cache keys.
@@ -126,7 +129,7 @@ cooldown() {
 	COOLDOWN_DID_FRESH=0
 }
 
-cache_file() { echo "$CACHE_DIR/${1}_2^${2}_t${THREADS}"; }
+cache_file() { bench_cache_file "$CACHE_DIR" "$1" "$2" "$THREADS" "$CACHE_STAMP"; }
 cache_lookup() {
 	local f label; f="$(cache_file "$1" "$2")"
 	[[ "$cache_read" == true && -s "$f" ]] || return 1

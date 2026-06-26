@@ -25,7 +25,7 @@
 # below): flock runs the large sizes, the competitors the small ones, and a
 # prover's MT and ST lists can differ.
 #
-# Caching: every result is saved under bench-blake3-cache/<prover>_2^<h>_t<threads>.
+# Caching: every result is saved under bench-blake3-cache/<prover>_2^<h>_t<threads>_<gitsha>.
 # A plain `./bench_blake3.sh` reuses cached rows and only runs what's missing;
 # naming a prover re-runs it fresh. USE_CACHE=1 reuses even with args; NO_CACHE=1
 # forces fresh runs (still caching). Knobs: per-prover {FLOCK,B64,P3}_{MT,ST}_SIZES
@@ -36,6 +36,9 @@ set -euo pipefail
 
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLOCK_ROOT="$(cd "$BASE/.." && pwd)"
+# shellcheck source=bench_cache_lib.sh
+source "$BASE/bench_cache_lib.sh"
+CACHE_STAMP="$(bench_cache_repo_stamp "$FLOCK_ROOT")"
 
 # Thread count — performance-core count by default (matches Flock's
 # init_perf_thread_pool); RAYON_NUM_THREADS wins. Also part of cache keys.
@@ -131,7 +134,7 @@ cooldown() {
 	COOLDOWN_DID_FRESH=0
 }
 
-cache_file() { echo "$CACHE_DIR/${1}_2^${2}_t${THREADS}"; }
+cache_file() { bench_cache_file "$CACHE_DIR" "$1" "$2" "$THREADS" "$CACHE_STAMP"; }
 cache_lookup() {
 	local f; f="$(cache_file "$1" "$2")"
 	[[ "$cache_read" == true && -s "$f" ]] || return 1

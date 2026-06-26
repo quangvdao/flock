@@ -32,9 +32,9 @@ run; the first run of each competitor therefore includes a one-time clone+build
   provers); single-threaded (ST) runs use `RAYON_NUM_THREADS=1`.
 - **Best-of-3.** Every prover is measured as the minimum of 3 timed runs after a
   warm-up (Flock via `n_runs=3`; competitors patched to best-of-3).
-- **Result cache.** Each orchestrator caches every `(prover, size, threads)` row
+- **Result cache.** Each orchestrator caches every `(prover, size, threads, git-sha)` row
   under `benchmarks/bench-<hash>-cache/` (gitignored). A plain re-run
-  reuses cached rows and only runs what's missing; **naming a prover** re-runs it
+  reuses cached rows only when the current Flock commit matches; **naming a prover** re-runs it
   fresh; `NO_CACHE=1` forces a full fresh run; delete the cache dir to reset.
 - **Cooldowns.** Pass `--cooldown N` (or `COOLDOWN=N`) to sleep N seconds between
   benchmarks so thermal throttling doesn't bias later (especially ST) runs.

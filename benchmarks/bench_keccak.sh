@@ -72,6 +72,9 @@ set -euo pipefail
 
 BASE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FLOCK_ROOT="$(cd "$BASE/.." && pwd)"
+# shellcheck source=bench_cache_lib.sh
+source "$BASE/bench_cache_lib.sh"
+CACHE_STAMP="$(bench_cache_repo_stamp "$FLOCK_ROOT")"
 BHS_DIR="$BASE/bench-hash-in-snark"
 
 # Thread count for the bench-hash-in-snark runs — also part of their cached
@@ -252,7 +255,7 @@ cooldown() {
 	COOLDOWN_DID_FRESH=0
 }
 
-cache_file() { echo "$CACHE_DIR/${1}_2^${2}_t${THREADS}"; }
+cache_file() { bench_cache_file "$CACHE_DIR" "$1" "$2" "$THREADS" "$CACHE_STAMP"; }
 
 # cache_lookup PROVER H — when cache-read is on and a cached row exists, append
 # it to ROWS, print a note, and return 0 (caller skips running); else return 1.
