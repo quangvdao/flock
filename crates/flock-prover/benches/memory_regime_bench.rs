@@ -12,7 +12,7 @@
 //! - `MEMORY_HASH` — `blake3` (default), `sha2`, or `keccak3`
 //! - `MEMORY_N` — instance count (overrides `MEMORY_LOG2` when set)
 //! - `MEMORY_LOG2` — `log2` instance count (default `18` for blake3/sha2)
-//! - `FLOCK_REGIME` — `PREWARM`, `R0`, `R1`, `R2`, `R4`, or `ALL`
+//! - `FLOCK_REGIME` — `PREWARM`, `R0`, `R1`, `R2`, `R3`, `R4`, or `ALL`
 //! - `FLOCK_TRIALS` — timed trials per regime (default `10`)
 //! - `FLOCK_WARMUP` — `1`/`0` untimed warmup prove before trials (default `1` for R0/R1)
 //! - `FLOCK_SCRATCH_CLEAR` — `1`/`0` call `scratch::clear()` before each trial (default per regime)
@@ -35,6 +35,7 @@ enum Regime {
     R0,
     R1,
     R2,
+    R3,
     R4,
 }
 
@@ -45,6 +46,7 @@ impl Regime {
             "r0" => Some(Self::R0),
             "r1" => Some(Self::R1),
             "r2" => Some(Self::R2),
+            "r3" => Some(Self::R3),
             "r4" => Some(Self::R4),
             _ => None,
         }
@@ -56,6 +58,7 @@ impl Regime {
             Self::R0 => "R0",
             Self::R1 => "R1",
             Self::R2 => "R2",
+            Self::R3 => "R3",
             Self::R4 => "R4",
         }
     }
@@ -172,14 +175,14 @@ fn resolve_n(hash: &str, log2_default: usize) -> (usize, usize) {
 fn regime_warm(regime: Regime) -> SetupWarmOpts {
     match regime {
         Regime::R1 => SetupWarmOpts::COLD,
-        Regime::R0 | Regime::R2 | Regime::R4 => SetupWarmOpts::PRODUCTION,
+        Regime::R0 | Regime::R2 | Regime::R3 | Regime::R4 => SetupWarmOpts::PRODUCTION,
         Regime::Prewarm => SetupWarmOpts::COLD,
     }
 }
 
 fn regime_warmup(regime: Regime) -> bool {
     match regime {
-        Regime::R2 => false,
+        Regime::R2 | Regime::R3 => false,
         Regime::Prewarm => false,
         Regime::R0 | Regime::R1 | Regime::R4 => env_bool("FLOCK_WARMUP", true),
     }
@@ -188,7 +191,7 @@ fn regime_warmup(regime: Regime) -> bool {
 fn regime_scratch_clear(regime: Regime) -> bool {
     match regime {
         Regime::R2 => true,
-        Regime::R0 | Regime::R1 | Regime::R4 | Regime::Prewarm => {
+        Regime::R0 | Regime::R1 | Regime::R3 | Regime::R4 | Regime::Prewarm => {
             env_bool("FLOCK_SCRATCH_CLEAR", false)
         }
     }
