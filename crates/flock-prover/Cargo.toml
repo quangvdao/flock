@@ -235,6 +235,10 @@ name = "memory_regime_bench"
 harness = false
 
 [[bench]]
+name = "flock_levers_bench"
+harness = false
+
+[[bench]]
 name = "permutation"
 harness = false
 

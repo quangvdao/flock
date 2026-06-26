@@ -33,6 +33,7 @@ benchmarks/bench-keccak-cache/
 benchmarks/bench-sha256-cache/
 benchmarks/bench-blake3-cache/
 benchmarks/memory-regime-results/
+benchmarks/flock-levers-results/
 
 benchmarks/cache/
 
