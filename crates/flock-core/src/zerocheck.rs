@@ -21,15 +21,22 @@ use crate::ntt::{AdditiveNttGf8, InvNttTableByteSingleGf8};
 use serde::{Deserialize, Serialize};
 
 pub mod multilinear;
+mod projective;
 pub mod univariate_skip;
 pub mod univariate_skip_deg4;
 pub mod univariate_skip_deg4_optimized;
 pub mod univariate_skip_optimized;
 
 use multilinear::{
-    UniSkipFoldTable, fold_and_compute_round_pair_into, fold_in_place_pair,
-    interpolate_at_z_combined, interpolate_at_z_on_lambda, round_pair_naive,
+    UniSkipFoldTable, fold_and_compute_round_pair_into,
+    fold_and_compute_round_pair_projective_into, fold_in_place_pair, interpolate_at_z_combined,
+    interpolate_at_z_on_lambda, round_pair_naive,
     uni_skip_fold_and_round_pair_optimized_packed_padded,
+    uni_skip_fold_and_round_pair_optimized_packed_padded_projective,
+};
+use projective::{
+    final_bind_projective,
+    fold_and_compute_round_pair_in_place as fold_and_compute_round_pair_projective_in_place,
 };
 use univariate_skip_optimized::{
     c_s_f128, medium_challenges_ghash, round1_shift_reduce_extract_c_packed_padded,
@@ -187,8 +194,9 @@ pub fn prove_packed_padded<C: Challenger>(
     padding: &PaddingSpec,
     challenger: &mut C,
 ) -> (ZerocheckProof, ZerocheckClaim) {
-    let (proof, claim, _) =
-        prove_packed_padded_inner(a_packed, b_packed, c_packed, m, padding, false, challenger);
+    let (proof, claim, _) = prove_packed_padded_inner::<C, true>(
+        a_packed, b_packed, c_packed, m, padding, false, challenger,
+    );
     (proof, claim)
 }
 
@@ -207,8 +215,9 @@ pub fn prove_packed_padded_capture_s_hat_v_c<C: Challenger>(
     padding: &PaddingSpec,
     challenger: &mut C,
 ) -> (ZerocheckProof, ZerocheckClaim, Vec<F128>) {
-    let (proof, claim, captured) =
-        prove_packed_padded_inner(a_packed, b_packed, c_packed, m, padding, true, challenger);
+    let (proof, claim, captured) = prove_packed_padded_inner::<C, true>(
+        a_packed, b_packed, c_packed, m, padding, true, challenger,
+    );
     (
         proof,
         claim,
@@ -217,7 +226,7 @@ pub fn prove_packed_padded_capture_s_hat_v_c<C: Challenger>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prove_packed_padded_inner<C: Challenger>(
+fn prove_packed_padded_inner<C: Challenger, const PROJECTIVE: bool>(
     a_packed: &[u8],
     b_packed: &[u8],
     c_packed: &[u8],
@@ -326,7 +335,17 @@ fn prove_packed_padded_inner<C: Challenger>(
     let fold_table = UniSkipFoldTable::new(k_skip, z);
     let mut mlv_arg = vec![F128::ONE; n_mlv];
     mlv_arg[1..].copy_from_slice(&r[k_skip + 1..]);
-    let (mut a_mlv, mut b_mlv, msg_1, msg_inf) =
+    let (mut a_mlv, mut b_mlv, msg_1, msg_inf) = if PROJECTIVE {
+        uni_skip_fold_and_round_pair_optimized_packed_padded_projective(
+            a_packed,
+            b_packed,
+            m,
+            k_skip,
+            &fold_table,
+            &mlv_arg,
+            padding,
+        )
+    } else {
         uni_skip_fold_and_round_pair_optimized_packed_padded(
             a_packed,
             b_packed,
@@ -335,7 +354,8 @@ fn prove_packed_padded_inner<C: Challenger>(
             &fold_table,
             &mlv_arg,
             padding,
-        );
+        )
+    };
 
     if zc_timing {
         eprintln!(
@@ -355,8 +375,9 @@ fn prove_packed_padded_inner<C: Challenger>(
     //
     // Iter i: fold (a, b) at ρ_{i+1}, compute round (i+3) message, sample
     // ρ_{i+2}. Use the fused parallel path while log_n ≥ 10; below that the
-    // SplitEqGhash inner can't form lo_size ≥ 2, so we fall back to
-    // fold_in_place_pair + round_pair_naive.
+    // SplitEqGhash inner can't form lo_size ≥ 2, so the production path uses
+    // the fused in-place rolling-basis kernel (the Boolean implementation is
+    // retained as a test oracle).
     //
     // Ping-pong scratch buffers for the fused path: each fused round folds
     // (a_mlv, b_mlv) of size N into size N/2. Rather than allocating — and,
@@ -386,14 +407,25 @@ fn prove_packed_padded_inner<C: Challenger>(
 
         let (m1, mi) = if log_n_before >= 10 {
             let half = a_mlv.len() / 2;
-            let (m1, mi) = fold_and_compute_round_pair_into(
-                &a_mlv,
-                &b_mlv,
-                &mut a_nxt[..half],
-                &mut b_nxt[..half],
-                rho_prev,
-                &r_next,
-            );
+            let (m1, mi) = if PROJECTIVE {
+                fold_and_compute_round_pair_projective_into(
+                    &a_mlv,
+                    &b_mlv,
+                    &mut a_nxt[..half],
+                    &mut b_nxt[..half],
+                    rho_prev,
+                    &r_next,
+                )
+            } else {
+                fold_and_compute_round_pair_into(
+                    &a_mlv,
+                    &b_mlv,
+                    &mut a_nxt[..half],
+                    &mut b_nxt[..half],
+                    rho_prev,
+                    &r_next,
+                )
+            };
             // Swap current <-> scratch, then shrink the new current to the
             // folded size. The old (larger) buffer becomes scratch; we only
             // ever write its leading `half` slots next round, so its stale
@@ -404,8 +436,14 @@ fn prove_packed_padded_inner<C: Challenger>(
             b_mlv.truncate(half);
             (m1, mi)
         } else {
-            fold_in_place_pair(&mut a_mlv, &mut b_mlv, rho_prev);
-            round_pair_naive(&a_mlv, &b_mlv, &r_next)
+            if PROJECTIVE {
+                fold_and_compute_round_pair_projective_in_place(
+                    &mut a_mlv, &mut b_mlv, rho_prev, &r_next,
+                )
+            } else {
+                fold_in_place_pair(&mut a_mlv, &mut b_mlv, rho_prev);
+                round_pair_naive(&a_mlv, &b_mlv, &r_next)
+            }
         };
 
         multilinear_msgs.push((m1, mi));
@@ -416,12 +454,18 @@ fn prove_packed_padded_inner<C: Challenger>(
 
     // ---- 8. Final binding at ρ_{n_mlv} (the last challenge) ----
     let rho_last = *mlv_rhos.last().expect("at least one ρ sampled");
-    fold_in_place_pair(&mut a_mlv, &mut b_mlv, rho_last);
+    let (final_a_eval, final_b_eval) = if PROJECTIVE {
+        let a = final_bind_projective(&a_mlv, rho_last);
+        let b = final_bind_projective(&b_mlv, rho_last);
+        a_mlv.truncate(1);
+        b_mlv.truncate(1);
+        (a, b)
+    } else {
+        fold_in_place_pair(&mut a_mlv, &mut b_mlv, rho_last);
+        (a_mlv[0], b_mlv[0])
+    };
     debug_assert_eq!(a_mlv.len(), 1);
     debug_assert_eq!(b_mlv.len(), 1);
-
-    let final_a_eval = a_mlv[0];
-    let final_b_eval = b_mlv[0];
 
     // ---- Fiat–Shamir: bind the final â, b̂ claims into the transcript ----
     //
@@ -1070,5 +1114,40 @@ mod tests {
         assert_eq!(proof1.final_c_eval, proof2.final_c_eval);
         assert_eq!(claim1.z, claim2.z);
         assert_eq!(claim1.mlv_challenges, claim2.mlv_challenges);
+    }
+
+    #[test]
+    fn projective_prover_matches_boolean_reference() {
+        for &m in &[13usize, 14, 16] {
+            let mut rng = Rng::new(0xC001_CAFE + m as u64);
+            let a = rng.bits(1 << m);
+            let b = rng.bits(1 << m);
+            let c: Vec<bool> = a.iter().zip(&b).map(|(x, y)| *x & *y).collect();
+            let (a_p, b_p, c_p) = pack_abc(&a, &b, &c);
+            let padding = PaddingSpec::dense(m);
+
+            let mut ch_boolean = FsChallenger::new(b"flock-basis-equivalence-v0");
+            let boolean = prove_packed_padded_inner::<FsChallenger, false>(
+                &a_p,
+                &b_p,
+                &c_p,
+                m,
+                &padding,
+                true,
+                &mut ch_boolean,
+            );
+            let mut ch_projective = FsChallenger::new(b"flock-basis-equivalence-v0");
+            let projective = prove_packed_padded_inner::<FsChallenger, true>(
+                &a_p,
+                &b_p,
+                &c_p,
+                m,
+                &padding,
+                true,
+                &mut ch_projective,
+            );
+
+            assert_eq!(boolean, projective, "basis changed proof or claim at m={m}");
+        }
     }
 }

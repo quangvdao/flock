@@ -47,12 +47,17 @@ mod kernels;
 
 #[cfg(target_arch = "aarch64")]
 use kernels::aarch64::fold_one_row_neon_unchecked_8;
+#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+use kernels::aarch64::fold_projective_pairs_neon;
 #[cfg(all(
     target_arch = "x86_64",
     target_feature = "avx512f",
     target_feature = "vpclmulqdq"
 ))]
-use kernels::x86_64::{fold_and_message_x86_avx512, fold_round2_pair_x86_unchecked_8};
+use kernels::x86_64::{
+    fold_and_message_projective_x86_avx512, fold_and_message_x86_avx512,
+    fold_round2_pair_x86_unchecked_8,
+};
 
 /// Returns `(pair_in_block_mask, useful_pairs_inclusive)` for the round-2
 /// fused-fold kernel. A pair (post-URM chunks `2k`, `2k+1`) is fully inside
@@ -454,6 +459,52 @@ pub fn uni_skip_fold_and_round_pair_optimized_packed_padded(
     mlv_challenges: &[F128],
     padding: &PaddingSpec,
 ) -> (Vec<F128>, Vec<F128>, F128, F128) {
+    uni_skip_fold_and_round_pair_optimized_packed_padded_basis::<false>(
+        a_packed,
+        b_packed,
+        m,
+        k_skip,
+        table,
+        mlv_challenges,
+        padding,
+    )
+}
+
+/// Projective-output variant of
+/// [`uni_skip_fold_and_round_pair_optimized_packed_padded`].
+///
+/// The round-2 message is unchanged, but each adjacent output pair is stored
+/// as `(a(0), a(0)+a(1))`, entering the rolling monomial basis without a
+/// separate table pass.
+pub(super) fn uni_skip_fold_and_round_pair_optimized_packed_padded_projective(
+    a_packed: &[u8],
+    b_packed: &[u8],
+    m: usize,
+    k_skip: usize,
+    table: &UniSkipFoldTable,
+    mlv_challenges: &[F128],
+    padding: &PaddingSpec,
+) -> (Vec<F128>, Vec<F128>, F128, F128) {
+    uni_skip_fold_and_round_pair_optimized_packed_padded_basis::<true>(
+        a_packed,
+        b_packed,
+        m,
+        k_skip,
+        table,
+        mlv_challenges,
+        padding,
+    )
+}
+
+fn uni_skip_fold_and_round_pair_optimized_packed_padded_basis<const PROJECTIVE: bool>(
+    a_packed: &[u8],
+    b_packed: &[u8],
+    m: usize,
+    k_skip: usize,
+    table: &UniSkipFoldTable,
+    mlv_challenges: &[F128],
+    padding: &PaddingSpec,
+) -> (Vec<F128>, Vec<F128>, F128, F128) {
     use rayon::prelude::*;
 
     assert_eq!(
@@ -523,9 +574,9 @@ pub fn uni_skip_fold_and_round_pair_optimized_packed_padded(
                     let b1 = fold_one_row_neon_unchecked_8(table_ptr, b_pkt_ptr.add(x1g * 8));
 
                     a_chunk[x0l] = a0;
-                    a_chunk[x1l] = a1;
+                    a_chunk[x1l] = if PROJECTIVE { a0 + a1 } else { a1 };
                     b_chunk[x0l] = b0;
-                    b_chunk[x1l] = b1;
+                    b_chunk[x1l] = if PROJECTIVE { b0 + b1 } else { b1 };
 
                     let eq_l = eq_lo[x_lo];
                     let g1 = a1 * b1;
@@ -577,9 +628,17 @@ pub fn uni_skip_fold_and_round_pair_optimized_packed_padded(
                         );
                         [a0[lane], a1[lane], b0[lane], b1[lane]] = folded;
                         a_chunk[x0l] = a0[lane];
-                        a_chunk[x1l] = a1[lane];
+                        a_chunk[x1l] = if PROJECTIVE {
+                            a0[lane] + a1[lane]
+                        } else {
+                            a1[lane]
+                        };
                         b_chunk[x0l] = b0[lane];
-                        b_chunk[x1l] = b1[lane];
+                        b_chunk[x1l] = if PROJECTIVE {
+                            b0[lane] + b1[lane]
+                        } else {
+                            b1[lane]
+                        };
                     }
 
                     let a1x4 = f128x4_loadu(a1.as_ptr());
@@ -619,9 +678,9 @@ pub fn uni_skip_fold_and_round_pair_optimized_packed_padded(
                         b_pkt_ptr.add(x1g * 8),
                     );
                     a_chunk[x0l] = a0;
-                    a_chunk[x1l] = a1;
+                    a_chunk[x1l] = if PROJECTIVE { a0 + a1 } else { a1 };
                     b_chunk[x0l] = b0;
-                    b_chunk[x1l] = b1;
+                    b_chunk[x1l] = if PROJECTIVE { b0 + b1 } else { b1 };
                     let eq_l = eq_lo[x_lo];
                     p1_acc ^= eq_l.mul_unreduced(a1 * b1);
                     pinf_acc ^= eq_l.mul_unreduced((a0 + a1) * (b0 + b1));
@@ -659,9 +718,9 @@ pub fn uni_skip_fold_and_round_pair_optimized_packed_padded(
                     let a1 = table.fold_one_row(&a_packed[x1g * n_chunks..(x1g + 1) * n_chunks]);
                     let b1 = table.fold_one_row(&b_packed[x1g * n_chunks..(x1g + 1) * n_chunks]);
                     a_chunk[x0l] = a0;
-                    a_chunk[x1l] = a1;
+                    a_chunk[x1l] = if PROJECTIVE { a0 + a1 } else { a1 };
                     b_chunk[x0l] = b0;
-                    b_chunk[x1l] = b1;
+                    b_chunk[x1l] = if PROJECTIVE { b0 + b1 } else { b1 };
                     let eq_l = eq_lo[x_lo];
                     let g1 = a1 * b1;
                     p1_acc ^= eq_l.mul_unreduced(g1);
@@ -792,6 +851,28 @@ pub fn fold_and_compute_round_pair_into(
     r_fold: F128,
     r_next: &[F128],
 ) -> (F128, F128) {
+    fold_and_compute_round_pair_into_basis::<false>(a, b, a_out, b_out, r_fold, r_next)
+}
+
+pub(super) fn fold_and_compute_round_pair_projective_into(
+    a: &[F128],
+    b: &[F128],
+    a_out: &mut [F128],
+    b_out: &mut [F128],
+    r_fold: F128,
+    r_next: &[F128],
+) -> (F128, F128) {
+    fold_and_compute_round_pair_into_basis::<true>(a, b, a_out, b_out, r_fold, r_next)
+}
+
+fn fold_and_compute_round_pair_into_basis<const PROJECTIVE: bool>(
+    a: &[F128],
+    b: &[F128],
+    a_out: &mut [F128],
+    b_out: &mut [F128],
+    r_fold: F128,
+    r_next: &[F128],
+) -> (F128, F128) {
     use rayon::prelude::*;
 
     let n = a.len();
@@ -830,8 +911,13 @@ pub fn fold_and_compute_round_pair_into(
             ))]
             // SAFETY: chunk geometry supplies two inputs per output and two
             // outputs per eq_lo value; features are guaranteed by the cfg.
-            let (p1, pinf) =
-                unsafe { fold_and_message_x86_avx512(a_in, b_in, a_out, b_out, r_fold, eq_lo) };
+            let (p1, pinf) = unsafe {
+                if PROJECTIVE {
+                    fold_and_message_projective_x86_avx512(a_in, b_in, a_out, b_out, r_fold, eq_lo)
+                } else {
+                    fold_and_message_x86_avx512(a_in, b_in, a_out, b_out, r_fold, eq_lo)
+                }
+            };
 
             #[cfg(not(all(
                 target_arch = "x86_64",
@@ -842,8 +928,23 @@ pub fn fold_and_compute_round_pair_into(
                 // Fold a_in→a_out and b_in→b_out at r_fold. The field layer
                 // selects the architecture kernel; this loop only consumes
                 // the resulting values to build the message.
-                crate::field::f128_slice::fold_pairs(a_in, 0, a_out, r_fold);
-                crate::field::f128_slice::fold_pairs(b_in, 0, b_out, r_fold);
+                if PROJECTIVE {
+                    #[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+                    // SAFETY: the cfg gate supplies PMULL and chunk geometry
+                    // supplies two coefficients per output.
+                    unsafe {
+                        fold_projective_pairs_neon(a_in, a_out, r_fold);
+                        fold_projective_pairs_neon(b_in, b_out, r_fold);
+                    }
+                    #[cfg(not(all(target_arch = "aarch64", target_feature = "aes")))]
+                    for t in 0..a_out.len() {
+                        a_out[t] = a_in[2 * t] + r_fold * a_in[2 * t + 1];
+                        b_out[t] = b_in[2 * t] + r_fold * b_in[2 * t + 1];
+                    }
+                } else {
+                    crate::field::f128_slice::fold_pairs(a_in, 0, a_out, r_fold);
+                    crate::field::f128_slice::fold_pairs(b_in, 0, b_out, r_fold);
+                }
 
                 let mut p1_acc = F256Unreduced::ZERO;
                 let mut pinf_acc = F256Unreduced::ZERO;
@@ -893,10 +994,28 @@ pub fn fold_and_compute_round_pair_into(
                         let g1_b = a1_b * b1_b;
                         let g1_c = a1_c * b1_c;
                         let g1_d = a1_d * b1_d;
-                        let g_inf_a = (a0_a + a1_a) * (b0_a + b1_a);
-                        let g_inf_b = (a0_b + a1_b) * (b0_b + b1_b);
-                        let g_inf_c = (a0_c + a1_c) * (b0_c + b1_c);
-                        let g_inf_d = (a0_d + a1_d) * (b0_d + b1_d);
+                        let a_inf_a = a0_a + a1_a;
+                        let a_inf_b = a0_b + a1_b;
+                        let a_inf_c = a0_c + a1_c;
+                        let a_inf_d = a0_d + a1_d;
+                        let b_inf_a = b0_a + b1_a;
+                        let b_inf_b = b0_b + b1_b;
+                        let b_inf_c = b0_c + b1_c;
+                        let b_inf_d = b0_d + b1_d;
+                        let g_inf_a = a_inf_a * b_inf_a;
+                        let g_inf_b = a_inf_b * b_inf_b;
+                        let g_inf_c = a_inf_c * b_inf_c;
+                        let g_inf_d = a_inf_d * b_inf_d;
+                        if PROJECTIVE {
+                            a_out[o + 1] = a_inf_a;
+                            a_out[o + 3] = a_inf_b;
+                            a_out[o + 5] = a_inf_c;
+                            a_out[o + 7] = a_inf_d;
+                            b_out[o + 1] = b_inf_a;
+                            b_out[o + 3] = b_inf_b;
+                            b_out[o + 5] = b_inf_c;
+                            b_out[o + 7] = b_inf_d;
+                        }
                         // Deferred-reduction accumulate: on x86 widen all 8 products
                         // 4 lanes at a time (eq_lo[x_lo_a..x_lo_a+4] is contiguous),
                         // reduced once after the loop; else scalar mul_unreduced.
@@ -955,8 +1074,18 @@ pub fn fold_and_compute_round_pair_into(
                     let eq_l_b = eq_lo[x_lo_b];
                     let g1_a = a1_a * b1_a;
                     let g1_b = a1_b * b1_b;
-                    let g_inf_a = (a0_a + a1_a) * (b0_a + b1_a);
-                    let g_inf_b = (a0_b + a1_b) * (b0_b + b1_b);
+                    let a_inf_a = a0_a + a1_a;
+                    let a_inf_b = a0_b + a1_b;
+                    let b_inf_a = b0_a + b1_a;
+                    let b_inf_b = b0_b + b1_b;
+                    let g_inf_a = a_inf_a * b_inf_a;
+                    let g_inf_b = a_inf_b * b_inf_b;
+                    if PROJECTIVE {
+                        a_out[o + 1] = a_inf_a;
+                        a_out[o + 3] = a_inf_b;
+                        b_out[o + 1] = b_inf_a;
+                        b_out[o + 3] = b_inf_b;
+                    }
                     p1_acc ^= eq_l_a.mul_unreduced(g1_a);
                     p1_acc ^= eq_l_b.mul_unreduced(g1_b);
                     pinf_acc ^= eq_l_a.mul_unreduced(g_inf_a);
@@ -1544,6 +1673,19 @@ mod tests {
                 &mlv_challenges,
                 &padding,
             );
+            let projective = uni_skip_fold_and_round_pair_optimized_packed_padded_projective(
+                &a_packed,
+                &b_packed,
+                m,
+                K_SKIP,
+                &table,
+                &mlv_challenges,
+                &padding,
+            );
+            let mut dense_a_twisted = dense.0.clone();
+            let mut dense_b_twisted = dense.1.clone();
+            crate::zerocheck::projective::twist_lowest_in_place(&mut dense_a_twisted);
+            crate::zerocheck::projective::twist_lowest_in_place(&mut dense_b_twisted);
             assert_eq!(
                 dense.0, padded.0,
                 "a_mlv: m={m}, k_log={k_log}, useful={useful_bits}"
@@ -1559,6 +1701,22 @@ mod tests {
             assert_eq!(
                 dense.3, padded.3,
                 "msg_inf: m={m}, k_log={k_log}, useful={useful_bits}"
+            );
+            assert_eq!(
+                dense_a_twisted, projective.0,
+                "projective a_mlv: m={m}, k_log={k_log}, useful={useful_bits}"
+            );
+            assert_eq!(
+                dense_b_twisted, projective.1,
+                "projective b_mlv: m={m}, k_log={k_log}, useful={useful_bits}"
+            );
+            assert_eq!(
+                dense.2, projective.2,
+                "projective msg_1: m={m}, k_log={k_log}, useful={useful_bits}"
+            );
+            assert_eq!(
+                dense.3, projective.3,
+                "projective msg_inf: m={m}, k_log={k_log}, useful={useful_bits}"
             );
         }
     }

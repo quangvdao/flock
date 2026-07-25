@@ -1,5 +1,31 @@
 use crate::field::F128;
 
+/// Fold a projective-basis table, where each adjacent input pair is
+/// `(c₀, c₁)` for `c₀ + X·c₁`.
+///
+/// # Safety
+/// Requires the `aes` target feature.
+#[cfg(all(target_arch = "aarch64", target_feature = "aes"))]
+pub(crate) unsafe fn fold_projective_pairs_neon(src: &[F128], dst: &mut [F128], r: F128) {
+    use crate::field::gf2_128::aarch64::ghash_mul_vec2_neon;
+
+    debug_assert_eq!(src.len(), 2 * dst.len());
+    let lanes = dst.len() & !1;
+    let mut t = 0;
+    while t < lanes {
+        let s = 2 * t;
+        // SAFETY: this function's target-feature contract supplies PMULL.
+        let prod = unsafe { ghash_mul_vec2_neon([r, r], [src[s + 1], src[s + 3]]) };
+        dst[t] = src[s] + prod[0];
+        dst[t + 1] = src[s + 2] + prod[1];
+        t += 2;
+    }
+    if t < dst.len() {
+        let s = 2 * t;
+        dst[t] = src[s] + r * src[s + 1];
+    }
+}
+
 /// NEON one-row fold: 8 aligned 16-byte loads + 8 XORs, hand-unrolled for
 /// `n_chunks = 8` (the k_skip=6 protocol size). Returns the folded F128.
 ///
